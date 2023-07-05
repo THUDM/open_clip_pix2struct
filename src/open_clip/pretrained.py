@@ -11,7 +11,7 @@ from .version import __version__
 
 try:
     from huggingface_hub import hf_hub_download
-    hf_hub_download = partial(hf_hub_download, library_name="open_clip", library_version=__version__)
+    hf_hub_download = partial(hf_hub_download, library_name="open_clip", library_version=__version__, local_files_only=True)
     _has_hf_hub = True
 except ImportError:
     hf_hub_download = None

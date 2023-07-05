@@ -108,6 +108,7 @@ def load_checkpoint(model, checkpoint_path, strict=True):
 def create_model(
         model_name: str,
         pretrained: Optional[str] = None,
+        customized_config=None,
         precision: str = 'fp32',
         device: Union[str, torch.device] = 'cpu',
         jit: bool = False,
@@ -122,7 +123,13 @@ def create_model(
         require_pretrained: bool = False,
 ):
     has_hf_hub_prefix = model_name.startswith(HF_HUB_PREFIX)
-    if has_hf_hub_prefix:
+    if customized_config:
+        with open(customized_config, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        pretrained_cfg = config['preprocess_cfg']
+        model_cfg = config['model_cfg']
+        checkpoint_path = config["ckpt_path"]
+    elif has_hf_hub_prefix:
         model_id = model_name[len(HF_HUB_PREFIX):]
         checkpoint_path = download_pretrained_from_hf(model_id, cache_dir=cache_dir)
         config_path = download_pretrained_from_hf(model_id, filename='open_clip_config.json', cache_dir=cache_dir)
@@ -237,6 +244,10 @@ def create_model(
             logging.info(f'Loading pretrained {model_name} weights ({pretrained}).')
             load_checkpoint(model, checkpoint_path)
             pretrained_loaded = True
+        elif customized_config:
+            logging.info(f'Loading customized {model_name} weights ({checkpoint_path}).')
+            load_checkpoint(model, checkpoint_path, strict=False)
+            pretrained_loaded = True
 
         if require_pretrained and not pretrained_loaded:
             # callers of create_model_from_pretrained always expect pretrained weights
@@ -304,10 +315,12 @@ def create_model_and_transforms(
         aug_cfg: Optional[Union[Dict[str, Any], AugmentationCfg]] = None,
         cache_dir: Optional[str] = None,
         output_dict: Optional[bool] = None,
+        customized_config=None,
 ):
     model = create_model(
         model_name,
         pretrained,
+        customized_config=customized_config,
         precision=precision,
         device=device,
         jit=jit,

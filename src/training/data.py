@@ -19,6 +19,9 @@ from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler, IterableD
 from torch.utils.data.distributed import DistributedSampler
 from webdataset.filters import _shuffle
 from webdataset.tariterators import base_plus_ext, url_opener, tar_file_expander, valid_sample
+from functools import partial
+from training.data_utils import resize_fn
+import glob
 
 try:
     import horovod.torch as hvd
@@ -327,23 +330,43 @@ class ResampledShards2(IterableDataset):
 
 def get_wds_dataset(args, preprocess_img, is_train, epoch=0, floor=False, tokenizer=None):
     input_shards = args.train_data if is_train else args.val_data
-    assert input_shards is not None
+    if is_train:
+        include_dirs=["/zhangpai21/webdataset/laion-aes/train","/zhangpai21/webdataset/laion-aes/train2"]
+        files = []
+        for dir in include_dirs:
+            files += glob.glob(dir + "/*.tar")
+        input_shards = files
+        assert input_shards is not None
+    else:
+        input_shards = ['/zhangpai21/webdataset/cc12m_split/cc12m-003470.shard.tar','/zhangpai21/webdataset/cc12m_split/cc12m-003471.shard.tar','/zhangpai21/webdataset/cc12m_split/cc12m-003469.shard.tar']
+        # include_dirs=["/zhangpai21/dm/coco/train"]
+        # files = []
+        # for dir in include_dirs:
+        #     files += glob.glob(dir+"/*.tar")
+        # input_shards = files
+        # assert input_shards is not None
     resampled = getattr(args, 'dataset_resampled', False) and is_train
 
     num_shards = None
     if is_train:
         if args.train_num_samples is not None:
             num_samples = args.train_num_samples
+            num_shards = len(input_shards)
         else:
-            num_samples, num_shards = get_dataset_size(input_shards)
+            #num_samples, num_shards = get_dataset_size(input_shards)
+            #TODO: is this right?
+            num_samples = 407332084
+            num_shards = len(input_shards)
             if not num_samples:
                 raise RuntimeError(
                     'Currently, the number of dataset samples must be specified for the training dataset. '
                     'Please specify it via `--train-num-samples` if no dataset length info is present.')
     else:
         # Eval will just exhaust the iterator if the size is not specified.
-        num_samples = args.val_num_samples or 0 
-
+        num_samples = args.val_num_samples or 0
+        num_shards = len(input_shards)
+    print("num_samples: ", num_samples)
+    print("num_shards: ", num_shards)
     shared_epoch = SharedEpoch(epoch=epoch)  # create a shared epoch store to sync epoch to dataloader worker proc
     
     if resampled:
@@ -385,12 +408,20 @@ def get_wds_dataset(args, preprocess_img, is_train, epoch=0, floor=False, tokeni
             # at this point, we have an iterator over the shards assigned to each worker
             wds.tarfile_to_samples(handler=log_and_continue),
         ])
+    # pipeline.extend([
+    #     wds.select(filter_no_caption_or_no_image),
+    #     wds.decode("pilrgb", handler=log_and_continue),
+    #     wds.rename(image="jpg;png;jpeg;webp", text="txt"),
+    #     wds.map_dict(image=preprocess_img, text=lambda text: tokenizer(text)[0]),
+    #     wds.to_tuple("image", "text"),
+    #     wds.batched(args.batch_size, partial=not is_train)
+    # ])
+
+    # TODO: compatible with previous code
     pipeline.extend([
-        wds.select(filter_no_caption_or_no_image),
-        wds.decode("pilrgb", handler=log_and_continue),
+        partial(resize_fn, size=(400, 14), resize_method='patch-resize', tokenizer=tokenizer),
         wds.rename(image="jpg;png;jpeg;webp", text="txt"),
-        wds.map_dict(image=preprocess_img, text=lambda text: tokenizer(text)[0]),
-        wds.to_tuple("image", "text"),
+        wds.to_tuple("image", "text", "position_ids", "size"),
         wds.batched(args.batch_size, partial=not is_train)
     ])
 

@@ -193,7 +193,7 @@ class HFTokenizer:
 
     def __init__(self, tokenizer_name: str):
         from transformers import AutoTokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, cache_dir='/zhangpai21/checkpoints/clip', local_files_only=True)
 
     def save_pretrained(self, dest):
         self.tokenizer.save_pretrained(dest)

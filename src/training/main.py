@@ -11,11 +11,12 @@ import numpy as np
 import torch
 from torch import optim
 from torch.cuda.amp import GradScaler
-
-try:
-    import wandb
-except ImportError:
-    wandb = None
+from transformers import AutoTokenizer
+# try:
+#     import wandb
+# except ImportError:
+#     wandb = None
+wandb = None
 
 try:
     import torch.utils.tensorboard as tensorboard
@@ -218,6 +219,7 @@ def main(args):
     model, preprocess_train, preprocess_val = create_model_and_transforms(
         args.model,
         args.pretrained,
+        customized_config=args.customized_config,
         precision=args.precision,
         device=device,
         jit=args.torchscript,
@@ -231,6 +233,10 @@ def main(args):
         aug_cfg=args.aug_cfg,
         output_dict=True,
     )
+    if model.visual.direct_input_patch:
+        args.use_position_ids = True
+    else:
+        args.use_position_ids = False
     if args.distill:
         # FIXME: currenlty assumes the model your distilling from has the same tokenizer & transforms.
         dist_model, _, _ = create_model_and_transforms(
@@ -266,6 +272,23 @@ def main(args):
         model.lock_text_tower(
             unlocked_layers=args.lock_text_unlocked_layers,
             freeze_layer_norm=args.lock_text_freeze_layer_norm)
+
+    ## lock all except the position embedding !!!!!
+    for param in model.parameters():
+        param.requires_grad = False
+    model.visual.col_positional_embedding.requires_grad_(True)
+    model.visual.row_positional_embedding.requires_grad_(True)
+    if args.bitfit:
+        print('Use bitfit')
+        model.visual.ln_post.bias.requires_grad_(True)
+        model.visual.ln_pre.bias.requires_grad_(True)
+        for layer_id in range(model.visual.transformer.layers):
+            model.visual.transformer.resblocks[layer_id].ln_1.bias.requires_grad_(True)
+            model.visual.transformer.resblocks[layer_id].ln_2.bias.requires_grad_(True)
+            model.visual.transformer.resblocks[layer_id].attn.in_proj_bias.requires_grad_(True)
+            model.visual.transformer.resblocks[layer_id].attn.out_proj.bias.requires_grad_(True)
+            model.visual.transformer.resblocks[layer_id].mlp[0].bias.requires_grad_(True)
+            model.visual.transformer.resblocks[layer_id].mlp[2].bias.requires_grad_(True)
 
     if args.grad_checkpointing:
         model.set_grad_checkpointing()
@@ -345,7 +368,10 @@ def main(args):
             logging.info(f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})")
 
     # initialize datasets
-    data = get_data(args, (preprocess_train, preprocess_val), epoch=start_epoch, tokenizer=get_tokenizer(args.model))
+    tokenizer = AutoTokenizer.from_pretrained('laion/CLIP-ViT-L-14-DataComp.XL-s13B-b90K',
+                                              cache_dir='/zhangpai21/checkpoints/clip', local_files_only=True)
+    tokenizer = get_tokenizer("hf-hub:laion/CLIP-ViT-L-14-DataComp.XL-s13B-b90K")
+    data = get_data(args, (preprocess_train, preprocess_val), epoch=start_epoch, tokenizer=tokenizer)
     assert len(data), 'At least one train or eval dataset must be specified.'
 
     # create scheduler if train

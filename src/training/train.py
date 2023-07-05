@@ -9,10 +9,11 @@ import torch
 import torch.nn.functional as F
 from torch.nn.parallel.distributed import DistributedDataParallel
 
-try:
-    import wandb
-except ImportError:
-    wandb = None
+# try:
+#     import wandb
+# except ImportError:
+#     wandb = None
+wandb = None
 
 from open_clip import get_input_dtype, CLIP, CustomTextCLIP
 from .distributed import is_master
@@ -75,7 +76,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
     sample_digits = math.ceil(math.log(dataloader.num_samples + 1, 10))
 
     if args.accum_freq > 1:
-        accum_images, accum_texts, accum_features = [], [], {}
+        accum_images, accum_texts, accum_position_ids, accum_image_sizes, accum_features = [], [], [], [], {}
 
     losses_m = {}
     batch_time_m = AverageMeter()
@@ -88,16 +89,26 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
         if not args.skip_scheduler:
             scheduler(step)
 
-        images, texts = batch
+        # TODO: compatible with previous code
+        if args.use_position_ids:
+            images, texts, position_ids, image_size = batch
+        else:
+            images, texts = batch
         images = images.to(device=device, dtype=input_dtype, non_blocking=True)
         texts = texts.to(device=device, non_blocking=True)
+        if args.use_position_ids:
+            position_ids = position_ids.to(device=device, non_blocking=True)
+            # image_size = image_size.to(device=device, non_blocking=True)
 
         data_time_m.update(time.time() - end)
         optimizer.zero_grad()
 
         if args.accum_freq == 1:
             with autocast():
-                model_out = model(images, texts)
+                if args.use_position_ids:
+                    model_out = model(images, texts, position_ids, image_size)
+                else:
+                    model_out = model(images, texts)
                 logit_scale = model_out["logit_scale"]
                 if args.distill:
                     with torch.no_grad():
@@ -113,7 +124,10 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             # First, cache the features without any gradient tracking.
             with torch.no_grad():
                 with autocast():
-                    model_out = model(images, texts)
+                    if args.use_position_ids:
+                        model_out = model(images, texts, position_ids, image_size)
+                    else:
+                        model_out = model(images, texts)
                     model_out.pop("logit_scale")
                     for key, val in model_out.items():
                         if key in accum_features:
@@ -123,6 +137,8 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
 
                 accum_images.append(images)
                 accum_texts.append(texts)
+                accum_position_ids.append(position_ids)
+                accum_image_sizes.append(image_size)
 
             # If (i + 1) % accum_freq is not zero, move on to the next batch.
             if ((i + 1) % args.accum_freq) > 0:
@@ -136,8 +152,13 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             for j in range(args.accum_freq):
                 images = accum_images[j]
                 texts = accum_texts[j]
+                position_ids = accum_position_ids[j]
+                image_size = accum_image_sizes[j]
                 with autocast():
-                    model_out = model(images, texts)
+                    if args.use_position_ids:
+                        model_out = model(images, texts, position_ids, image_size)
+                    else:
+                        model_out = model(images, texts)
                     logit_scale = model_out.pop("logit_scale")
                     inputs = {}
                     for key, val in accum_features.items():
@@ -170,7 +191,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
 
         # reset gradient accum, if enabled
         if args.accum_freq > 1:
-            accum_images, accum_texts, accum_features = [], [], {}
+            accum_images, accum_texts, accum_position_ids, accum_image_sizes, accum_features = [], [], [], [], {}
 
         # Note: we clamp to 4.6052 = ln(100), as in the original paper.
         with torch.no_grad():
@@ -258,12 +279,20 @@ def evaluate(model, data, epoch, args, tb_writer=None):
         all_image_features, all_text_features = [], []
         with torch.no_grad():
             for i, batch in enumerate(dataloader):
-                images, texts = batch
+                if args.use_position_ids:
+                    images, texts, position_ids, image_size = batch
+                else:
+                    images, texts = batch
                 images = images.to(device=device, dtype=input_dtype, non_blocking=True)
                 texts = texts.to(device=device, non_blocking=True)
+                if args.use_position_ids:
+                    position_ids = position_ids.to(device=device, non_blocking=True)
 
                 with autocast():
-                    model_out = model(images, texts)
+                    if args.use_position_ids:
+                        model_out = model(images, texts, position_ids, image_size)
+                    else:
+                        model_out = model(images, texts)
                     image_features = model_out["image_features"]
                     text_features = model_out["text_features"]
                     logit_scale = model_out["logit_scale"]

@@ -1,0 +1,33 @@
+{
+  "ckpt_path": "/zhangpai21/yzy/lightning_logs/2023_07_04-11_34_39-model_RN50-lr_0.0005-b_32-j_8-p_amp/checkpoints/epoch_41.pt",
+  "model_cfg": {
+    "embed_dim": 768,
+    "vision_cfg": {
+      "image_size": 224,
+      "layers": 24,
+      "width": 1024,
+      "patch_size": 14,
+      "npatch": 400,
+      "direct_intput_patch": true
+    },
+    "text_cfg": {
+      "context_length": 77,
+      "vocab_size": 49408,
+      "width": 768,
+      "heads": 12,
+      "layers": 12
+    }
+  },
+  "preprocess_cfg": {
+    "mean": [
+      0.48145466,
+      0.4578275,
+      0.40821073
+    ],
+    "std": [
+      0.26862954,
+      0.26130258,
+      0.27577711
+    ]
+  }
+}

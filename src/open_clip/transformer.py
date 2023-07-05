@@ -9,7 +9,6 @@ from torch.utils.checkpoint import checkpoint
 
 from .utils import to_2tuple
 
-
 class LayerNormFp32(nn.LayerNorm):
     """Subclass torch's LayerNorm to handle fp16 (by casting to float32 and back)."""
 
@@ -343,7 +342,9 @@ class VisionTransformer(nn.Module):
             input_patchnorm: bool = False,
             act_layer: Callable = nn.GELU,
             norm_layer: Callable = LayerNorm,
-            output_tokens: bool = False
+            output_tokens: bool = False,
+            direct_intput_patch: bool = False,
+            npatch: int = 400,
     ):
         super().__init__()
         self.output_tokens = output_tokens
@@ -354,8 +355,12 @@ class VisionTransformer(nn.Module):
 
         # whether to layernorm each patch, as done in dual patchnorm paper - https://arxiv.org/abs/2302.01327v1
         self.input_patchnorm = input_patchnorm
+        self.direct_input_patch = direct_intput_patch
 
-        if input_patchnorm:
+        if direct_intput_patch:
+            patch_input_dim = patch_height * patch_width * 3
+            self.patch_embedding = nn.Linear(patch_input_dim, width, bias=False)
+        elif input_patchnorm:
             patch_input_dim = patch_height * patch_width * 3
             self.patchnorm_pre_ln = LayerNorm(patch_input_dim)
             self.conv1 = nn.Linear(patch_input_dim, width)
@@ -366,8 +371,14 @@ class VisionTransformer(nn.Module):
         # class embeddings and positional embeddings
         scale = width ** -0.5
         self.class_embedding = nn.Parameter(scale * torch.randn(width))
-        self.positional_embedding = nn.Parameter(scale * torch.randn(self.grid_size[0] * self.grid_size[1] + 1, width))
-
+        if not self.direct_input_patch:
+            self.positional_embedding = nn.Parameter(scale * torch.randn(self.grid_size[0] * self.grid_size[1] + 1, width))
+        else:
+            self.npatch = npatch
+            # TODO: should we add scale here?
+            self.col_positional_embedding = torch.nn.Embedding(npatch + 1, width, padding_idx=-1)
+            self.row_positional_embedding = torch.nn.Embedding(npatch + 1, width, padding_idx=-1)
+            # self.embdding_proj = nn.Linear(width*2, width)
         # setting a patch_dropout of 0. would mean it is disabled and this function would be the identity fn
         self.patch_dropout = PatchDropout(patch_dropout) if patch_dropout > 0. else nn.Identity()
 
@@ -457,10 +468,12 @@ class VisionTransformer(nn.Module):
         else:
             return x[:, 0], x[:, 1:]
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, position_ids=None, image_size=None):
 
         # to patches - whether to use dual patchnorm - https://arxiv.org/abs/2302.01327v1
-        if self.input_patchnorm:
+        if self.direct_input_patch:
+            x = self.patch_embedding(x)
+        elif self.input_patchnorm:
             # einops - rearrange(x, 'b c (h p1) (w p2) -> b (h w) (c p1 p2)')
             x = x.reshape(x.shape[0], x.shape[1], self.grid_size[0], self.patch_size[0], self.grid_size[1], self.patch_size[1])
             x = x.permute(0, 2, 4, 1, 3, 5)
@@ -472,11 +485,25 @@ class VisionTransformer(nn.Module):
             x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
             x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
 
-        # class embeddings and positional embeddings
-        x = torch.cat(
-            [self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device),
-             x], dim=1)  # shape = [*, grid ** 2 + 1, width]
-        x = x + self.positional_embedding.to(x.dtype)
+
+        if self.direct_input_patch:
+            assert position_ids is not None
+            assert image_size is not None
+            position_ids = torch.where(position_ids == -1, self.npatch, position_ids)
+            col_embedding = self.col_positional_embedding(position_ids[:, :, 0]) # [n, seqlen, dim]
+            row_embedding = self.row_positional_embedding(position_ids[:, :, 1])
+            position_embedding = col_embedding + row_embedding
+            x = x + position_embedding.to(x.dtype)
+            x = torch.cat(
+                [self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype,
+                                                                device=x.device),
+                 x], dim=1)
+
+        else:        # class embeddings and positional embeddings
+            x = torch.cat(
+                [self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device),
+                 x], dim=1)  # shape = [*, grid ** 2 + 1, width]
+            x = x + self.positional_embedding.to(x.dtype)
 
         # a patch_dropout of 0. would mean it is disabled and this function would do nothing but return what was passed in
         x = self.patch_dropout(x)

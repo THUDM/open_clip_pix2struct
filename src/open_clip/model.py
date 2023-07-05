@@ -46,6 +46,8 @@ class CLIPVisionCfg:
     timm_drop: float = 0.  # head dropout
     timm_drop_path: Optional[float] = None  # backbone stochastic depth
 
+    direct_intput_patch: bool = False  # whether to use direct input patch (instead of whole image)
+    npatch: int = 400  # number of patches to use for direct input patch
 
 @dataclass
 class CLIPTextCfg:
@@ -140,6 +142,8 @@ def _build_vision_tower(
             output_dim=embed_dim,
             act_layer=act_layer,
             norm_layer=norm_layer,
+            direct_intput_patch=vision_cfg.direct_intput_patch,
+            npatch=vision_cfg.npatch,
         )
 
     return visual
@@ -221,8 +225,11 @@ class CLIP(nn.Module):
         self.visual.set_grad_checkpointing(enable)
         self.transformer.grad_checkpointing = enable
 
-    def encode_image(self, image, normalize: bool = False):
-        features = self.visual(image)
+    def encode_image(self, image, normalize: bool = False, position_ids=None, image_size=None):
+        if position_ids is not None:
+            features = self.visual(image, position_ids=position_ids, image_size=image_size)
+        else:
+            features = self.visual(image)
         return F.normalize(features, dim=-1) if normalize else features
 
     def encode_text(self, text, normalize: bool = False):
@@ -243,8 +250,10 @@ class CLIP(nn.Module):
             self,
             image: Optional[torch.Tensor] = None,
             text: Optional[torch.Tensor] = None,
+            position_ids=None,
+            image_size=None,
     ):
-        image_features = self.encode_image(image, normalize=True) if image is not None else None
+        image_features = self.encode_image(image, position_ids=position_ids, image_size=image_size, normalize=True) if image is not None else None
         text_features = self.encode_text(text, normalize=True) if text is not None else None
         if self.output_dict:
             return {

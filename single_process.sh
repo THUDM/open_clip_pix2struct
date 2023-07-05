@@ -1,0 +1,17 @@
+python -m training.main \
+    --save-frequency 1 \
+    --zeroshot-frequency 1 \
+    --report-to tensorboard \
+    --dataset-type "webdataset" \
+    --precision amp \
+    --train-data="/zhangpai21/webdataset/laion-aes/train/laion-aes_part_004_00000078.tar"  \
+    --val-data="/zhangpai21/webdataset/laion-aes/train/laion-aes_part_004_00000079.tar"  \
+    --warmup 10000 \
+    --batch-size=32 \
+    --lr=1e-3 \
+    --wd=0.1 \
+    --epochs=30 \
+    --workers=1 \
+    --customized-config "/zhangpai21/workspace/yzy/open_clip/open_clip_config.json" \
+    --train-num-samples 100000000 \
+    --dataset-resampled
