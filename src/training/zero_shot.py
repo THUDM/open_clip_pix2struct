@@ -21,13 +21,14 @@ def run(model, classifier, dataloader, args):
 
     with torch.no_grad():
         top1, top5, n = 0., 0., 0.
-        for images, target in tqdm(dataloader, unit_scale=args.batch_size):
+        for images, position_ids, image_size, target in tqdm(dataloader, unit_scale=args.batch_size):
             images = images.to(device=args.device, dtype=input_dtype)
+            position_ids = position_ids.to(device=args.device, dtype=input_dtype)
             target = target.to(args.device)
 
             with autocast():
                 # predict
-                output = model(image=images)
+                output = model(image=images, position_ids=position_ids, image_size=image_size)
                 image_features = output['image_features'] if isinstance(output, dict) else output[0]
                 logits = 100. * image_features @ classifier
 
@@ -57,7 +58,9 @@ def zero_shot_eval(model, data, epoch, args):
     logging.info('Building zero-shot classifier')
     autocast = get_autocast(args.precision)
     with autocast():
-        tokenizer = get_tokenizer(args.model)
+        # tokenizer = get_tokenizer(args.model)
+        #TODO : change this
+        tokenizer = get_tokenizer("hf-hub:laion/CLIP-ViT-L-14-DataComp.XL-s13B-b90K")
         classifier = build_zero_shot_classifier(
             model,
             tokenizer=tokenizer,

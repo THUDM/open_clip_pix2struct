@@ -1,5 +1,5 @@
 {
-  "ckpt_path": "/zhangpai21/yzy/lightning_logs/2023_07_04-11_43_52-model_RN50-lr_0.0005-b_32-j_8-p_amp/checkpoints/epoch_34.pt",
+  "ckpt_path": "/zhangpai21/yzy/lightning_logs/2023_07_04-11_43_52-model_RN50-lr_0.0005-b_32-j_8-p_amp/checkpoints/epoch_118.pt",
   "model_cfg": {
     "embed_dim": 768,
     "vision_cfg": {

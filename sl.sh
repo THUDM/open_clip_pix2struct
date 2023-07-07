@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --nodes=10
+#SBATCH --nodes=9
 #SBATCH --gres=gpu:8
 #SBATCH --ntasks-per-node=8
 #SBATCH --cpus-per-task=15
 #SBATCH --wait-all-nodes=1
-#SBATCH --job-name=open_clip_bitfit_10
+#SBATCH --job-name=open_clip_nobitfit_stage2
 #SBATCH --partition cogview
 #SBATCH --export=ALL
 #SBATCH --output=/zhangpai21/yzy/lightning_logs/256t576_zero_14/slurm_logs/slurm_yzy_%x_%j.out
@@ -40,11 +40,11 @@ srun python src/training/main.py \
     --batch-size=32 \
     --epochs=100000 \
     --workers=8 \
-    --customized-config "/zhangpai21/workspace/yzy/open_clip/open_clip_config.json" \
+    --customized-config "/zhangpai21/workspace/yzy/open_clip/open_clip_config_evalnobitfit.json" \
     --train-num-samples 10000000 \
     --dataset-resampled \
     --local-loss \
     --gather-with-grad \
     --logs "/zhangpai21/yzy/lightning_logs/" \
-    --bitfit \
+    --nofreeze \
 #    --resume /path/to/checkpoints/epoch_K.pt

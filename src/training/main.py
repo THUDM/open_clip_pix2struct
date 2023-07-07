@@ -274,21 +274,22 @@ def main(args):
             freeze_layer_norm=args.lock_text_freeze_layer_norm)
 
     ## lock all except the position embedding !!!!!
-    for param in model.parameters():
-        param.requires_grad = False
-    model.visual.col_positional_embedding.requires_grad_(True)
-    model.visual.row_positional_embedding.requires_grad_(True)
-    if args.bitfit:
-        print('Use bitfit')
-        model.visual.ln_post.bias.requires_grad_(True)
-        model.visual.ln_pre.bias.requires_grad_(True)
-        for layer_id in range(model.visual.transformer.layers):
-            model.visual.transformer.resblocks[layer_id].ln_1.bias.requires_grad_(True)
-            model.visual.transformer.resblocks[layer_id].ln_2.bias.requires_grad_(True)
-            model.visual.transformer.resblocks[layer_id].attn.in_proj_bias.requires_grad_(True)
-            model.visual.transformer.resblocks[layer_id].attn.out_proj.bias.requires_grad_(True)
-            model.visual.transformer.resblocks[layer_id].mlp[0].bias.requires_grad_(True)
-            model.visual.transformer.resblocks[layer_id].mlp[2].bias.requires_grad_(True)
+    if not args.nofreeze:
+        for param in model.parameters():
+            param.requires_grad = False
+        model.visual.col_positional_embedding.requires_grad_(True)
+        model.visual.row_positional_embedding.requires_grad_(True)
+        if args.bitfit:
+            print('Use bitfit')
+            model.visual.ln_post.bias.requires_grad_(True)
+            model.visual.ln_pre.bias.requires_grad_(True)
+            for layer_id in range(model.visual.transformer.layers):
+                model.visual.transformer.resblocks[layer_id].ln_1.bias.requires_grad_(True)
+                model.visual.transformer.resblocks[layer_id].ln_2.bias.requires_grad_(True)
+                model.visual.transformer.resblocks[layer_id].attn.in_proj_bias.requires_grad_(True)
+                model.visual.transformer.resblocks[layer_id].attn.out_proj.bias.requires_grad_(True)
+                model.visual.transformer.resblocks[layer_id].mlp[0].bias.requires_grad_(True)
+                model.visual.transformer.resblocks[layer_id].mlp[2].bias.requires_grad_(True)
 
     if args.grad_checkpointing:
         model.set_grad_checkpointing()

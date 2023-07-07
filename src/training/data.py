@@ -20,7 +20,7 @@ from torch.utils.data.distributed import DistributedSampler
 from webdataset.filters import _shuffle
 from webdataset.tariterators import base_plus_ext, url_opener, tar_file_expander, valid_sample
 from functools import partial
-from training.data_utils import resize_fn
+from training.data_utils import resize_fn, MyImageNet
 import glob
 
 try:
@@ -134,8 +134,7 @@ def get_imagenet(args, preprocess_fns, split):
             data_path = args.imagenet_val
             preprocess_fn = preprocess_val
         assert data_path
-
-        dataset = datasets.ImageFolder(data_path, transform=preprocess_fn)
+        dataset = MyImageNet(data_path)
 
     if is_train:
         idxs = np.zeros(len(dataset.targets))

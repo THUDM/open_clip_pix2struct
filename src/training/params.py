@@ -448,6 +448,11 @@ def parse_args(args):
         default=False,
         action="store_true"
     )
+    parser.add_argument(
+        "--nofreeze",
+        default=False,
+        action="store_true"
+    )
     args = parser.parse_args(args)
 
     # If some params are not passed, we use the default values based on model name.

@@ -1,5 +1,7 @@
 import io
 import math
+
+import datasets
 import numpy as np
 import torch
 from PIL import Image
@@ -8,13 +10,19 @@ from sat.data_utils.datasets import SimpleDistributedWebDataset
 from torchvision.transforms import ToTensor, Normalize
 import json
 import random
+import torchvision.datasets
 
-def parse_resize(img_bytes, h, w, method='fixed', arlist=None):
-    try:
-        img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-    except Exception as e:
-        print_all(e)
-        raise e
+
+def parse_resize(img_bytes, h, w, method='fixed', arlist=None, input_image=False):
+    if not input_image:
+        try:
+            img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+        except Exception as e:
+            print_all(e)
+            raise e
+    else:
+        img = img_bytes
+
     if method == 'fixed':  # fixed size
         img = img.resize((h, w))  # Pillow-SIMD is needed
     elif method == 'patch-resize':
@@ -51,6 +59,39 @@ def parse_resize(img_bytes, h, w, method='fixed', arlist=None):
         target_width = max(num_feasible_cols * lpatch, 1)
         img = img.crop((0, 0, target_width, target_height))
     return img
+
+
+def image_transform(sample, size=(224, 224), resize_method='fixed', arlist=None, input_image=False):
+    # image
+    if ('png' in sample or 'jpg' in sample):
+        img_bytes = sample['png'] if 'png' in sample else sample['jpg']
+        img = parse_resize(img_bytes, size[0], size[1], method=resize_method, arlist=arlist, input_image=input_image)
+        img = ToTensor()(img)
+        OPENAI_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
+        OPENAI_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
+        normalize = Normalize(mean=OPENAI_DATASET_MEAN, std=OPENAI_DATASET_STD)
+        img = normalize(img)
+
+        if resize_method in ['patch-resize', 'patch-crop', 'patch-resize-2', 'patch-crop-2']:
+            # split image into patches
+            npatch, lpatch = size
+            rows, cols = img.size(1) // lpatch, img.size(2) // lpatch
+            img = img.view(3, rows, lpatch, cols, lpatch).permute(1, 3, 2, 4, 0).contiguous()
+            img = img.view(-1, lpatch ** 2 * 3)
+            # pad to npatch
+            img = torch.cat([img, torch.zeros(npatch - img.size(0), lpatch ** 2 * 3)],
+                            dim=0)  # [seqlen, patch^2 * 3]
+            position_ids = torch.zeros(npatch, 2, dtype=torch.long) - 1
+            # 2d position [seqlen, 2]
+            position_ids[:rows * cols, 0] = torch.arange(rows * cols) // cols
+            position_ids[:rows * cols, 1] = torch.arange(rows * cols) % cols
+            size = (rows, cols)
+            return img, position_ids, size
+        else:
+            raise Exception
+    else:
+        raise Exception
+    # TODO other data key
 
 
 def resize_fn(src, size=(224, 224), resize_method='fixed', tokenizer=None):
@@ -98,40 +139,39 @@ def resize_fn(src, size=(224, 224), resize_method='fixed', tokenizer=None):
             if isinstance(txt, list):
                 txt = random.choice(txt)
         else:
-            raise Exception("NO text")
+            print("NO text")
+            txt = ""
 
         if tokenizer is not None:
             ret['txt'] = tokenizer(txt)[0]
         else:
             ret['txt'] = txt
 
-
-
-        # image
-        if ('png' in r or 'jpg' in r):
-            img_bytes = r['png'] if 'png' in r else r['jpg']
-            img = parse_resize(img_bytes, size[0], size[1], method=resize_method, arlist=arlist)
-            img = ToTensor()(img)
-
-            OPENAI_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
-            OPENAI_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
-            normalize = Normalize(mean=OPENAI_DATASET_MEAN, std=OPENAI_DATASET_STD)
-            img = normalize(img)
-
-            if resize_method in ['patch-resize', 'patch-crop', 'patch-resize-2', 'patch-crop-2']:
-                # split image into patches
-                npatch, lpatch = size
-                rows, cols = img.size(1) // lpatch, img.size(2) // lpatch
-                img = img.view(3, rows, lpatch, cols, lpatch).permute(1, 3, 2, 4, 0).contiguous()
-                img = img.view(-1, lpatch ** 2 * 3)
-                # pad to npatch
-                img = torch.cat([img, torch.zeros(npatch - img.size(0), lpatch ** 2 * 3)],
-                                dim=0)  # [seqlen, patch^2 * 3]
-                ret['position_ids'] = torch.zeros(npatch, 2, dtype=torch.long) - 1
-                # 2d position [seqlen, 2]
-                ret['position_ids'][:rows * cols, 0] = torch.arange(rows * cols) // cols
-                ret['position_ids'][:rows * cols, 1] = torch.arange(rows * cols) % cols
-                ret['size'] = (rows, cols)
-            ret['jpg'] = img
-        # TODO other data key
+        img, position_ids, image_size = image_transform(r, size=size, resize_method=resize_method, arlist=arlist)
+        ret["jpg"] = img
+        ret["position_ids"] = position_ids
+        ret["size"] = image_size
         yield ret
+
+
+class MyImageNet(torchvision.datasets.ImageFolder):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.method = "patch-resize"
+        self.size = (400, 14)
+        if self.method == 'patch-resize':
+            npatch, lpatch = self.size
+            # factorize npatch
+            res = []
+            for patch in range(npatch // 4 * 3, npatch + 1):
+                res.extend([[patch // i * 1. / i, patch] for i in range(1, patch + 1) if patch % i == 0])
+            self.arlist = np.array(res)
+        else:
+            self.arlist = None
+
+    def __getitem__(self, index: int):
+        sample, target = super().__getitem__(index)
+
+        sample, position_ids, image_size = image_transform({"jpg": sample}, size=self.size, resize_method=self.method,
+                                                  arlist=self.arlist, input_image=True)
+        return sample, position_ids, image_size, target
