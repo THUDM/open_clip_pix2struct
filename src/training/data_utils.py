@@ -57,6 +57,7 @@ def parse_resize(img_bytes, h, w, method='fixed', arlist=None, input_image=False
         num_feasible_cols = max(min(math.floor(scale * img.size[0] / lpatch), totalpatch), 1)
         target_height = max(num_feasible_rows * lpatch, 1)
         target_width = max(num_feasible_cols * lpatch, 1)
+        img = img.resize((round(img.size[0]*scale), round(img.size[1]*scale)))
         img = img.crop((0, 0, target_width, target_height))
     return img
 
@@ -157,9 +158,9 @@ def resize_fn(src, size=(224, 224), resize_method='fixed', tokenizer=None):
 class MyImageNet(torchvision.datasets.ImageFolder):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.method = "patch-resize"
+        self.method = "patch-crop2"
         self.size = (400, 14)
-        if self.method == 'patch-resize':
+        if self.method == 'patch-crop2':
             npatch, lpatch = self.size
             # factorize npatch
             res = []

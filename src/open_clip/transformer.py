@@ -195,6 +195,7 @@ class ResidualAttentionBlock(nn.Module):
             act_layer: Callable = nn.GELU,
             norm_layer: Callable = LayerNorm,
             is_cross_attention: bool = False,
+            attn_mask: torch.Tensor = None,
     ):
         super().__init__()
 
@@ -212,7 +213,7 @@ class ResidualAttentionBlock(nn.Module):
             ("c_proj", nn.Linear(mlp_width, d_model))
         ]))
         self.ls_2 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
-
+        self.attn_mask = attn_mask
     def attention(
             self,
             q_x: torch.Tensor,
@@ -238,6 +239,9 @@ class ResidualAttentionBlock(nn.Module):
         k_x = self.ln_1_kv(k_x) if hasattr(self, "ln_1_kv") and k_x is not None else None
         v_x = self.ln_1_kv(v_x) if hasattr(self, "ln_1_kv") and v_x is not None else None
 
+        if attn_mask is None and self.attn_mask is not None:
+            self.attn_mask = self.attn_mask.to(dtype=q_x.dtype, device=q_x.device)
+            attn_mask = self.attn_mask
         x = q_x + self.ls_1(self.attention(q_x=self.ln_1(q_x), k_x=k_x, v_x=v_x, attn_mask=attn_mask))
         x = x + self.ls_2(self.mlp(self.ln_2(x)))
         return x
@@ -320,6 +324,43 @@ class Transformer(nn.Module):
                 x = r(x, attn_mask=attn_mask)
         return x
 
+class TransformerFixFinal(nn.Module):
+    def __init__(
+            self,
+            width: int,
+            layers: int,
+            heads: int,
+            mlp_ratio: float = 4.0,
+            ls_init_value: float = None,
+            act_layer: Callable = nn.GELU,
+            norm_layer: Callable = LayerNorm,
+            final_attn_mask = None,
+    ):
+        super().__init__()
+        self.width = width
+        self.layers = layers
+        self.grad_checkpointing = False
+
+        self.resblocks = nn.ModuleList([
+            *[ResidualAttentionBlock(
+                width, heads, mlp_ratio, ls_init_value=ls_init_value, act_layer=act_layer, norm_layer=norm_layer)
+            for _ in range(layers-1)],
+            ResidualAttentionBlock(width, heads, mlp_ratio, ls_init_value=ls_init_value, act_layer=act_layer, norm_layer=norm_layer, attn_mask=final_attn_mask)
+        ])
+
+    def get_cast_dtype(self) -> torch.dtype:
+        if hasattr(self.resblocks[0].mlp.c_fc, 'int8_original_dtype'):
+            return self.resblocks[0].mlp.c_fc.int8_original_dtype
+        return self.resblocks[0].mlp.c_fc.weight.dtype
+
+    def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None):
+        for r in self.resblocks:
+            if self.grad_checkpointing and not torch.jit.is_scripting():
+                # TODO: handle kwargs https://github.com/pytorch/pytorch/issues/79887#issuecomment-1161758372
+                x = checkpoint(r, x, None, None, attn_mask)
+            else:
+                x = r(x, attn_mask=attn_mask)
+        return x
 
 class VisionTransformer(nn.Module):
     output_tokens: torch.jit.Final[bool]
@@ -333,8 +374,8 @@ class VisionTransformer(nn.Module):
             heads: int,
             mlp_ratio: float,
             ls_init_value: float = None,
-            global_average_pool: bool = False,
-            attentional_pool: bool = False,
+            global_average_pool: bool = False, #Vit-L is false
+            attentional_pool: bool = False, #Vit-L is false
             n_queries: int = 256,
             attn_pooler_heads: int = 8,
             output_dim: int = 512,
@@ -383,7 +424,13 @@ class VisionTransformer(nn.Module):
         self.patch_dropout = PatchDropout(patch_dropout) if patch_dropout > 0. else nn.Identity()
 
         self.ln_pre = norm_layer(width)
-        self.transformer = Transformer(
+
+        context_length = npatch + 1
+        mask = torch.empty(context_length, context_length)
+        mask.fill_(float("-inf"))
+        mask.fill_diagonal_(0)  # zero out the diagonal
+        mask[0, :] = 0
+        self.transformer = TransformerFixFinal(
             width,
             layers,
             heads,
@@ -391,6 +438,7 @@ class VisionTransformer(nn.Module):
             ls_init_value=ls_init_value,
             act_layer=act_layer,
             norm_layer=norm_layer,
+            final_attn_mask=mask,
         )
 
         self.global_average_pool = global_average_pool
@@ -468,7 +516,7 @@ class VisionTransformer(nn.Module):
         else:
             return x[:, 0], x[:, 1:]
 
-    def forward(self, x: torch.Tensor, position_ids=None, image_size=None):
+    def forward(self, x: torch.Tensor, position_ids=None, image_size=None, return_full_feature=False):
 
         # to patches - whether to use dual patchnorm - https://arxiv.org/abs/2302.01327v1
         if self.direct_input_patch:
@@ -513,16 +561,18 @@ class VisionTransformer(nn.Module):
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
 
-        if self.attn_pool is not None:
+        if self.attn_pool is not None:  #vit-L is None
             x = self.attn_pool(x)
             x = self.ln_post(x)
             pooled, tokens = self._global_pool(x)
         else:
             pooled, tokens = self._global_pool(x)
             pooled = self.ln_post(pooled)
+            tokens = self.ln_post(tokens)
 
         if self.proj is not None:
             pooled = pooled @ self.proj
+            tokens = tokens @ self.proj
 
         if self.output_tokens:
             return pooled, tokens
