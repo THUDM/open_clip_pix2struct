@@ -425,12 +425,12 @@ class VisionTransformer(nn.Module):
 
         self.ln_pre = norm_layer(width)
 
-        # context_length = npatch + 1
-        # mask = torch.empty(context_length, context_length)
-        # mask.fill_(float("-inf"))
-        # mask.fill_diagonal_(0)  # zero out the diagonal
-        # mask[0, :] = 0
-        self.transformer = Transformer(
+        context_length = npatch + 1
+        mask = torch.empty(context_length, context_length)
+        mask.fill_(float("-inf"))
+        mask.fill_diagonal_(0)  # zero out the diagonal
+        mask[0, :] = 0
+        self.transformer = TransformerFixFinal(
             width,
             layers,
             heads,
@@ -438,6 +438,7 @@ class VisionTransformer(nn.Module):
             ls_init_value=ls_init_value,
             act_layer=act_layer,
             norm_layer=norm_layer,
+            final_attn_mask=mask,
         )
 
         self.global_average_pool = global_average_pool
